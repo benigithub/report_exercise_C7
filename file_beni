@@ -1,0 +1,59 @@
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(rsample)
+library(caret)
+library(rsample)
+library(recipes)
+library(cowplot)
+daily_fluxes <- read_csv("FLX_CH-Dav_FLUXNET2015_FULLSET_DD_1997-2014_1-3.csv")
+daily_fluxes |> 
+  ggplot(aes(x = GPP_NT_VUT_REF, y = ..count..)) + 
+  geom_histogram()
+
+
+
+# Data splitting
+set.seed(1982)  # for reproducibility
+split <- rsample::initial_split(daily_fluxes, prop = 0.7, strata = "VPD_F")
+daily_fluxes_train <- rsample::training(split)
+daily_fluxes_test <- rsample::testing(split)
+
+# Model and pre-processing formulation, use all variables but LW_IN_F
+pp <- recipes::recipe(GPP_NT_VUT_REF ~ SW_IN_F + VPD_F + TA_F, 
+                      data = daily_fluxes_train |> drop_na()) |> 
+  recipes::step_BoxCox(all_predictors()) |> 
+  recipes::step_center(all_numeric(), -all_outcomes()) |>
+  recipes::step_scale(all_numeric(), -all_outcomes())
+
+
+# Fit KNN model k= 8
+mod_knn_8 <- caret::train(
+  pp, 
+  data = daily_fluxes_train |> drop_na(), 
+  method = "knn",
+  trControl = caret::trainControl(method = "none"),
+  tuneGrid = data.frame(k = 8),
+  metric = "RMSE"
+)
+
+
+# make model evaluation into a function to reuse code
+eval_model <- function(mod, df_train, df_test){
+  
+  # add predictions to the data frames
+  df_train <- df_train |> 
+    drop_na()
+  df_train$fitted <- predict(mod, newdata = df_train)
+  
+  df_test <- df_test |> 
+    drop_na()
+  df_test$fitted <- predict(mod, newdata = df_test)
+  
+  # get metrics tables
+  metrics_train <- df_train |> 
+    yardstick::metrics(GPP_NT_VUT_REF, fitted)
+  
+  metrics_test <- df_test |> 
+    yardstick::metrics(GPP_NT_VUT_REF, fitted)
+  
